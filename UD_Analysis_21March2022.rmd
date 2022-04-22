@@ -1,0 +1,812 @@
+---
+title: "Use dependent paper"
+output: html_notebook
+---
+
+
+```{r, message = FALSE}
+
+
+rm(list = ls())
+library(tidyverse)
+library('svglite')
+library(broom)
+library(purrr)
+library(lemon)
+library(pracma)
+library(lubridate)
+library(plotrix)
+library(lme4)
+library(lmerTest)
+library(car)
+library(sjstats)
+
+call_aesthethics <- function(text_size){
+  
+  th <- theme(   panel.grid.major = element_blank(),
+                 panel.grid.minor = element_blank(),
+                 panel.border = element_blank(),
+                 panel.background = element_blank(),
+                 axis.line = element_line(size = 0.5), 
+                 legend.position = 'right', 
+                 legend.text = element_text(size= text_size, family="Helvetica"),
+                 text = element_text(size= text_size, family="Helvetica"), 
+                 strip.text.x = element_text(size = rel(0.90)), 
+                 strip.text.y = element_text(size = rel(0.90)), 
+                 axis.title.x = element_text(vjust=-0.3), 
+                 plot.title = element_text(hjust = 0.5, vjust = 0), 
+                 axis.ticks = element_line(size = 0.4), 
+                 axis.text.x.bottom  = element_text(size = rel(0.90), margin = unit(c(t = 2.5, r = 0, b = 0, l = 0), "mm")),
+                 axis.title.y = element_text(vjust = 1),
+                 axis.text.y = element_text(size = rel(0.90), margin = unit(c(t = 0, r = 2.5, b = 0, l = 0), "mm")),
+                 axis.ticks.length = unit(-1.2, "mm"),
+                 axis.text.x.top = element_text(size = rel(0.90), margin = unit(c(t = 0, r = 0, b = 2.5, l = 0), "mm")))
+  
+  return(th)
+}
+
+my.colors2 <-  c("#006600", "#800080", "#FF9900", 'deepskyblue4')
+th <- call_aesthethics(16)
+
+# baseline subtraction function
+baseline_subtract <- function(my.data, base_cn_start, base_cn_end, returnAngle){
+  
+  
+  my.subjects <- unique(my.data$SN)
+  counter <- 1
+  mybaseline <- setNames ( data.frame(matrix(NaN, nrow = length(my.subjects) * 12, ncol = 5)), 
+                           c('SN', 'ti', 'Hand_base', 'RT_base','Return_base'))
+                                                    
+  for(si in my.subjects){
+    
+    idx <- my.data$SN == si
+      
+    for(mi in unique(my.data$ti[idx])){
+      
+      idx_sub <- my.data$SN == si & my.data$ti == mi
+      idx_bl <- my.data$SN == si & my.data$ti == mi & 
+        my.data$CN >= base_cn_start & my.data$CN <= base_cn_end
+      
+      sub_Hand_mean <- mean(my.data$Hand[idx_bl], na.rm = TRUE)
+      my.data$Handb[idx_sub] <- my.data$Hand[idx_sub] - sub_Hand_mean
+      
+      sub_RT_mean <- mean(my.data$RT[idx_bl], na.rm = TRUE)
+      my.data$RTb[idx_sub] <- my.data$RT[idx_sub] - sub_RT_mean
+      
+      if(returnAngle == 1){
+        sub_Return_mean <- mean(my.data$ReturnAngle[idx_bl], na.rm = TRUE)
+        my.data$ReturnAngleb[idx_sub] <- my.data$ReturnAngle[idx_sub] - sub_Return_mean
+        mybaseline$Return_base[counter] <- sub_Return_mean
+      }
+      
+      mybaseline$SN[counter] <- si
+      mybaseline$ti[counter] <- mi
+      mybaseline$Hand_base[counter] <- sub_Hand_mean
+      mybaseline$RT_base[counter] <- sub_RT_mean
+      counter <- counter + 1
+    }
+  }
+  
+  return(list(my.data, mybaseline))
+}
+
+
+
+```
+
+```{r setup}
+
+
+mainDir <- "~/Dropbox/VICE/JT/KIM_USEDEPENDENT/Figures"
+subDir <- today()
+figDir <- "~/Dropbox/VICE/JT/KIM_USEDEPENDENT/Figures/"
+knitr::opts_knit$set(root.dir = figDir)
+dir.create(file.path(mainDir, subDir), showWarnings = FALSE)
+
+
+```
+
+
+Renalaysis of V&S
+```{r}
+
+VS.data <- as_tibble( read.csv("/Users/jonathantsay/Dropbox/MOTOR/use_dependent/use-dependent-learning/VerstynenSabes2011.csv", header = TRUE, sep = ',')) %>% mutate(Bias = Hand_IB)
+
+```
+
+VS Individual data 
+```{r}
+
+
+for(si in unique(VS.data$SN)){
+  
+  ind.plot <- VS.data %>% 
+    filter(SN == si & Distance > 0) %>%  
+    ggplot(aes(x = RT, y = Bias, group = factor(Distance))) + 
+    geom_point(alpha = 0.4, aes(color = factor(Distance))) + 
+    geom_smooth(method = 'lm', aes(color = factor(Distance)), size = 0.5, se = FALSE) + 
+    #stat_cor(method = 'pearson')+ 
+    facet_rep_wrap(.~Distance, repeat.tick.labels = TRUE) + 
+    scale_color_manual(values = my.colors2[c(1, 2, 3)], guide = FALSE) + 
+    labs(y = 'Inward Bias (°)', x = 'RT (s)') + #subtitle = sprintf('V&S Subject #%s', si) 
+    th + theme(axis.text.x = element_text(angle = 45, hjust = 0.95), 
+               legend.position = 'none') +
+    scale_x_continuous(breaks = c(0.2, 0.4)) + 
+    scale_y_continuous(breaks = seq(-50, 100, 50)) + 
+    coord_capped_cart(ylim = c(-50, 100)) 
+  print(ind.plot) 
+  
+  ggsave(sprintf('VS_SUB%s_notitle_%s.pdf', si,subDir), plot = ind.plot, height = 3, width = 6,  units = "in")
+  
+}
+
+
+
+```
+
+
+
+VS.group data
+```{r}
+
+VS.data.ind <- VS.data %>%
+  group_by(SN, Distance) %>%
+  dplyr::summarise(bias_mean = mean(Bias, na.rm = TRUE), 
+                   rt_mean = mean(RT, na.rm = TRUE))
+
+VS.data.grp <- VS.data.ind %>%
+  group_by(Distance) %>%
+  dplyr::summarise(bias_grp_mean = mean(bias_mean, na.rm = TRUE), 
+                   bias_stderr_mean = std.error(bias_mean, na.rm = TRUE), 
+                   rt_grp_mean = mean(rt_mean, na.rm = TRUE), 
+                   rt_stderr_mean = std.error(rt_mean, na.rm = TRUE)) %>%
+  add_row(Distance = 0,  bias_grp_mean= 0, bias_stderr_mean = 0)
+
+VS.grp <- VS.data.grp %>%
+  mutate(groupvar = 1) %>%
+  ggplot(aes(x = Distance, y = bias_grp_mean, group = groupvar)) + 
+  geom_segment(aes(x=-5, xend=95, y = 0, yend = 0), color = 'lightgrey') +
+  geom_point() + 
+  geom_line() + 
+  geom_errorbar(aes(ymin = bias_grp_mean - bias_stderr_mean, ymax = bias_grp_mean + bias_stderr_mean), width = 0.2) + 
+  labs(y = 'Inward Bias (°)', x = 'Probe Distance (°)') +
+  th + theme(axis.text.x = element_text(angle = 45, hjust = 0.95), 
+             legend.position = 'none') +
+  scale_y_continuous(breaks = seq(0, 25, 5)) + 
+  scale_x_continuous(breaks = c(0, 30, 60, 90)) + 
+  coord_capped_cart(ylim = c(-5, 25))
+print(VS.grp)
+
+ggsave(sprintf('VS_Group_%s.pdf', subDir), plot = VS.grp, height = 3, width = 4,  units = "in")
+
+```
+
+VS Quantile Analysis
+```{r}
+
+VS.Quantile.plot <- VS.data %>%
+  group_by(SN, Distance) %>%
+  mutate(quantile = ntile(RT, 5)) %>%
+  group_by(SN, Distance, quantile) %>%
+  dplyr::summarise(bias_mean = mean(Bias, na.rm = TRUE), 
+                   RT_mean = mean(RT, na.rm = TRUE)) %>%
+  group_by(Distance, quantile) %>%
+  dplyr::summarise(bias_grp_mean = mean(bias_mean, na.rm = TRUE), 
+                   bias_std_err = std.error(bias_mean, na.rm = TRUE), 
+                   RT_grp_mean = mean(RT_mean, na.rm = TRUE), 
+                   RT_std_err = std.error(RT_mean, na.rm = TRUE)) %>%
+  ggplot(aes(x = RT_grp_mean, y = bias_grp_mean, color = factor(Distance),group = factor(Distance))) + 
+  geom_point() + 
+  geom_line() + 
+  geom_errorbarh(aes(xmax = RT_grp_mean + RT_std_err, xmin = RT_grp_mean - RT_std_err), alpha = 0.4)  +
+  geom_errorbar(aes(ymax =bias_grp_mean + bias_std_err, ymin = bias_grp_mean - bias_std_err), alpha = 0.4) + 
+  labs(y = 'Inward Bias (°)', x = 'RT (s)') +
+  scale_color_manual(values = c("black", my.colors2[c(1, 2, 3)]), guide = FALSE) + 
+  scale_x_continuous(breaks = seq(0.1, 0.5, 0.1)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.95), 
+        legend.position = 'none') +
+  th + 
+  scale_y_continuous(breaks = c(0, 20, 40)) +
+  coord_capped_cart(ylim = c(-5, 40),xlim = c(0.2, 0.5)) 
+print(VS.Quantile.plot)
+
+ggsave(sprintf('VS_Quantile_%s.pdf', subDir), plot = VS.Quantile.plot, height = 3, width = 4,  units = "in")
+
+```
+
+
+
+
+VS Quintile Normalize RT-Bias Dependency
+```{r}
+
+VS.Quantile.norm.plot <- VS.data %>%
+  group_by(SN, Distance) %>%
+  filter(Distance != 0) %>%
+  mutate(Scale_HandIB = scale(Hand_IB)) %>%
+  mutate(quantile = ntile(RT, 5)) %>%
+  group_by(SN, Distance, quantile) %>%
+  dplyr::summarise(bias_mean = mean(Scale_HandIB, na.rm = TRUE), 
+                   RT_mean = mean(RT, na.rm = TRUE)) %>%
+  group_by(Distance, quantile) %>%
+  dplyr::summarise(bias_grp_mean = mean(bias_mean, na.rm = TRUE), 
+                   bias_std_err = std.error(bias_mean, na.rm = TRUE), 
+                   RT_grp_mean = mean(RT_mean, na.rm = TRUE), 
+                   RT_std_err = std.error(RT_mean, na.rm = TRUE)) %>%
+  ggplot(aes(x = RT_grp_mean, y = bias_grp_mean, color = factor(Distance),group = factor(Distance))) + 
+  geom_point() + 
+  geom_line() + 
+  geom_errorbarh(aes(xmax = RT_grp_mean + RT_std_err, xmin = RT_grp_mean - RT_std_err), alpha = 0.4)  +
+  geom_errorbar(aes(ymax =bias_grp_mean + bias_std_err, ymin = bias_grp_mean - bias_std_err), alpha = 0.4) + 
+  labs(y = 'Inward Bias (norm)', x = 'RT (s)') +
+  scale_color_manual(values = c(my.colors2[c(1, 2, 3)]), guide = FALSE) + 
+  scale_x_continuous(breaks = seq(0.1, 0.5, 0.1)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.95), 
+        legend.position = 'none') +
+  th + 
+  coord_capped_cart(ylim = c(-1, 1),xlim = c(0.2, 0.5)) 
+print(VS.Quantile.norm.plot)
+
+setwd("~/Desktop")
+ggsave(sprintf('VS_Quantile_norm_%s.pdf', subDir), plot = VS.Quantile.norm.plot, height = 3, width = 4,  units = "in")
+
+```
+
+
+
+
+
+
+Import Experiment 1
+```{r}
+
+E1.data <- as_tibble( read.csv("/Users/jonathantsay/Dropbox/MOTOR/use_dependent/use-dependent-learning/UD_E1.csv", header = TRUE, sep = ',') %>%
+                        dplyr::select(SN:RTb, hand_theta_40)) %>% mutate(group = 1) %>%
+  mutate(Distance_raw = as.double( abs(ti - trainTgt)), 
+         Distance = case_when(Distance_raw > 180 ~ abs(Distance_raw - 360), 
+                              Distance_raw < -180 ~ abs(Distance_raw + 360),
+                              Distance_raw <= 180 & Distance_raw >= -180 ~ Distance_raw),
+         CN = TN, 
+         Hand = hand_theta_40, Handb = NaN, RTb = NaN)
+
+E1.data.base.out <- baseline_subtract(E1.data, 71, 140, 0)
+E1.data <- E1.data.base.out[[1]]
+E1.data.base <- E1.data.base.out[[2]]
+
+
+E1.data <- E1.data %>%
+  mutate(Hand_IB = case_when(trainTgt == 60 & (ti == 90   | ti == 120  | ti == 150 ) ~ -Handb, 
+                             trainTgt == 60 & (ti == 0   | ti == 30  | ti == 330 | ti == 60) ~ Handb, 
+                             trainTgt == 150 & (ti == 180  | ti == 210  | ti == 240) ~ -Handb, 
+                             trainTgt == 150 & (ti == 60   | ti == 90  | ti == 120 | ti == 150) ~ Handb))
+
+
+  
+
+```
+
+Experiment 1 Individual Data
+```{r}
+
+for(si in unique(E1.data$SN)){
+  
+  groupvar <- unique( E1.data$group[E1.data$SN == si] ) 
+  myymin <- min( E1.data$RT[E1.data$SN == si & E1.data$block >= 3 & E1.data$fbi == 0] ) + 0.1
+  myymax <- max( E1.data$RT[E1.data$SN == si & E1.data$block >= 3 & E1.data$fbi == 0] ) - 0.1
+  
+  ind.plot <- E1.data %>% 
+    filter(SN == si & Distance != 0) %>%  
+    filter(block >= 3 & fbi == 0 ) %>%
+    ggplot(aes(x = RT, y = Hand_IB, group = factor(Distance))) + 
+    geom_point(alpha = 0.4, aes(color = factor(Distance))) + 
+    geom_smooth(method = 'lm', aes(color = factor(Distance)), size = 0.5, se = FALSE, linetype= groupvar) +
+    #stat_cor(method = 'pearson')+ 
+    facet_rep_wrap(.~Distance, repeat.tick.labels = TRUE, ncol = 4) + 
+    scale_x_continuous(breaks = c(round(myymin, 1), round(myymax, 1) )) +
+    scale_color_manual(values = c(my.colors2[c(1, 2, 3)]), guide = FALSE) + 
+    labs(y = 'Inward Bias (°)', x = 'RT (s)', subtitle = sprintf('Exp 1 Subject #%s', si)) +
+    th + theme(axis.text.x = element_text(angle = 45, hjust = 0.95), 
+               legend.position = 'none') +
+    scale_y_continuous(breaks = seq(-50, 100, 50)) + 
+    coord_capped_cart(ylim = c(-50, 100)) 
+  print(ind.plot) 
+  
+  ggsave(sprintf('E1_SUB%s_Grp%s_notitle_%s.pdf', si, groupvar, subDir), plot = ind.plot, height = 3, width = 4,  units = "in")
+}
+
+```
+
+
+Experiment 1 Group Data
+```{r}
+
+E1.ind <- E1.data %>%
+  filter(block >= 3 & fbi == 0 ) %>%
+  group_by(SN, Distance, group) %>%
+  dplyr::summarise(hand_mean = mean(Hand_IB, na.rm = TRUE), 
+                   rt_mean = mean(RT, na.rm = TRUE))
+
+E1.ind.base <- E1.data %>%
+  filter(block< 3 & fbi == 0 ) %>%
+  group_by(SN, Distance, group) %>%
+  dplyr::summarise(hand_mean = mean(Hand_IB, na.rm = TRUE), 
+                   rt_mean = mean(RT, na.rm = TRUE))
+
+E1.grp <- E1.ind %>% 
+  group_by(Distance, group) %>%
+  dplyr::summarise(hand_grp_mean = mean(hand_mean, na.rm = TRUE),
+                   hand_grp_stderr = std.error(hand_mean, na.rm = TRUE),
+                   rt_grp_mean = mean(rt_mean, na.rm = TRUE), 
+                   rt_grp_stderr = std.error(rt_mean, na.rm = TRUE))
+
+
+E1.grp.plot <- E1.ind %>%
+  ggplot(aes(x = Distance, y = hand_mean, group = group)) + 
+  geom_segment(aes(x=-5, xend=95, y = 0, yend = 0), color = 'lightgrey') +
+  stat_summary(fun = 'mean', geom = "point") + 
+  stat_summary(fun = 'mean', geom = "line", aes(linetype = factor(group))) + 
+  stat_summary(fun.data = 'mean_se', geom = "errorbar", width = 2) + 
+  labs(y = 'Inward Bias (°)', x = 'Probe Distance (°)') +
+  scale_x_continuous(breaks = c(0, 30, 60, 90)) +
+  th + theme(axis.text.x = element_text(angle = 45, hjust = 0.95), 
+             legend.position = 'none') +
+  coord_capped_cart(ylim = c(-5, 40))
+print(E1.grp.plot)  
+
+ggsave(sprintf('E1_Group_%s.pdf', subDir), plot = E1.grp.plot, height = 3, width = 4,  units = "in")
+
+```
+Experiment 1 Group Data, with First Peak (Obtained from MClust)
+```{r}
+
+firstpeak <- setNames ( as.data.frame(matrix(nrow = 4, ncol = 5)), 
+                        c("Distance", "group", "hand_mean", "hand_ub", "hand_lb") )
+
+firstpeak$Distance <- c(0, 30, 60, 90)
+firstpeak$hand_mean <- c(-1.1, 1.1, 4.2, 3.4)
+firstpeak$hand_ub <- c(-1.1, 2.3, 5.1, 4.2)
+firstpeak$hand_lb <- c(-1.1, 0.1, 3.2, 2.5)
+
+E1.grpNoJit.plot <- E1.ind %>%
+  filter(group == 1) %>%
+  ggplot(aes(x = Distance, y = hand_mean, group = group)) + 
+  geom_segment(aes(x=-5, xend=95, y = 0, yend = 0), color = 'lightgrey') +
+  stat_summary(fun = 'mean', geom = "point") + 
+  stat_summary(fun = 'mean', geom = "line", aes(linetype = factor(group))) + 
+  stat_summary(fun.data = 'mean_se', geom = "errorbar", width = 2) + 
+  geom_point(inherit.aes = FALSE, data = firstpeak, aes(x = Distance, y = hand_mean), color = "black")+
+  geom_errorbar(inherit.aes = FALSE, data = firstpeak, aes(x = Distance, ymin = hand_lb, ymax = hand_ub), color = "black", width = 2)+
+  geom_line(inherit.aes = FALSE, data = firstpeak, aes(x = Distance, y = hand_mean), color = "black", linetype = "dashed")+
+  labs(y = 'Inward Bias (°)', x = 'Probe Distance (°)') +
+  scale_x_continuous(breaks = c(0, 30, 60, 90)) +
+  th + theme(axis.text.x = element_text(angle = 45, hjust = 0.95), 
+             legend.position = 'none') +
+  coord_capped_cart(ylim = c(-5, 40))
+print(E1.grpNoJit.plot)  
+
+ggsave(sprintf('E1_GroupNoJit_%s.pdf', subDir), plot = E1.grpNoJit.plot, height = 3, width = 4,  units = "in")
+
+std.error(E1.ind$hand_mean[E1.ind$group == 1 & E1.ind$Distance == 0])
+
+```
+
+
+Experiment 1 Quantile Analysis
+```{r}
+
+E1.ind.Quantile.data <- E1.data %>%
+  filter(block >= 3 & fbi == 0 ) %>%
+  group_by(SN, Distance, group) %>%
+  mutate(quantile = ntile(RT, 5)) %>%
+  group_by(SN, Distance, quantile, group) %>%
+  dplyr::summarise(bias_mean = mean(Hand_IB, na.rm = TRUE), 
+                   RT_mean = mean(RT, na.rm = TRUE))
+
+
+E1.Quantile.data <- E1.ind.Quantile.data %>% 
+  group_by(Distance, quantile, group) %>%
+  dplyr::summarise(bias_grp_mean = mean(bias_mean, na.rm = TRUE), 
+                   bias_std_err = std.error(bias_mean, na.rm = TRUE), 
+                   RT_grp_mean = mean(RT_mean, na.rm = TRUE), 
+                   RT_std_err = std.error(RT_mean, na.rm = TRUE))
+
+E1.Quantile.grp1.plot <- E1.Quantile.data %>%
+  filter(group == 1) %>%
+  ggplot(aes(x = RT_grp_mean, y = bias_grp_mean, color = factor(Distance), group = factor(Distance))) + 
+  geom_point() + 
+  geom_line() + 
+  geom_errorbarh(aes(xmax = RT_grp_mean + RT_std_err, xmin = RT_grp_mean - RT_std_err), alpha = 0.4)  +
+  geom_errorbar(aes(ymax =bias_grp_mean + bias_std_err, ymin = bias_grp_mean - bias_std_err), alpha = 0.4) + 
+  labs(y = 'Inward Bias (°)', x = 'RT (s)') +
+  scale_color_manual(values = c('black', my.colors2[c(1, 2, 3)]), guide = FALSE) + 
+  scale_x_continuous(breaks = seq(0.2, 0.6, 0.1)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.95), 
+        legend.position = 'none') +
+  th + 
+  scale_y_continuous(breaks = c(0, 25, 50, 75)) +
+  coord_capped_cart(ylim = c(-5, 75), xlim = c(0.175, 0.6)) 
+print(E1.Quantile.grp1.plot)
+
+ggsave(sprintf('E1_Quantile_Grp1_%s.pdf', subDir), plot = E1.Quantile.grp1.plot, height = 3, width = 4,  units = "in")
+
+```
+Experiment 1 Normalized Quintile Analysis
+```{r}
+
+E1.ind.Quantile.norm.data <- E1.data %>%
+  filter(block >= 3 & fbi == 0 & group == 1) %>%
+  group_by(SN, Distance) %>%
+  mutate(Scale_HandIB = scale(Hand_IB)) %>%
+  mutate(quantile = ntile(RT, 5)) %>%
+  group_by(SN, Distance, quantile) %>%
+  dplyr::summarise(bias_mean = mean(Scale_HandIB, na.rm = TRUE), 
+                   RT_mean = mean(RT, na.rm = TRUE))
+
+
+E1.Quantile.norm.data <- E1.ind.Quantile.norm.data %>% 
+  group_by(Distance, quantile) %>%
+  dplyr::summarise(bias_grp_mean = mean(bias_mean, na.rm = TRUE), 
+                   bias_std_err = std.error(bias_mean, na.rm = TRUE), 
+                   RT_grp_mean = mean(RT_mean, na.rm = TRUE), 
+                   RT_std_err = std.error(RT_mean, na.rm = TRUE))
+
+E1.Quantile.all.norm.plot <- E1.Quantile.norm.data %>%
+  filter(Distance != 0) %>%
+  ggplot(aes(x = RT_grp_mean, y = bias_grp_mean, color = factor(Distance), group = factor(Distance))) + 
+  geom_point() + 
+  geom_line() + 
+  geom_errorbarh(aes(xmax = RT_grp_mean + RT_std_err, xmin = RT_grp_mean - RT_std_err), alpha = 0.4)  +
+  geom_errorbar(aes(ymax =bias_grp_mean + bias_std_err, ymin = bias_grp_mean - bias_std_err), alpha = 0.4) + 
+  labs(y = 'Inward Bias (norm)', x = 'RT (s)') +
+  scale_color_manual(values = c(my.colors2[c(1, 2, 3)]), guide = FALSE) + 
+  scale_x_continuous(breaks = seq(0.2, 0.7, 0.1)) + 
+    th + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.95), 
+        legend.position = 'none') 
+print(E1.Quantile.all.norm.plot)
+
+ggsave(sprintf('E1_Quantile_Grp1_Norm_%s.pdf', subDir), plot = E1.Quantile.all.norm.plot, height = 3, width = 4,  units = "in")
+
+```
+
+
+
+Trajectory 
+```{r, eval = FALSE}
+
+E1.traj.data <- as_tibble( read.csv("/Users/jonathantsay/Dropbox/MOTOR/use_dependent/UD_WithTraj.csv", header = TRUE, sep = ',')) %>%
+  dplyr::select(SN:hx_138, hy_1:hy_138) 
+
+
+for(si in unique(E1.traj.data$SN)){
+  E1.traj.data.long <- E1.traj.data %>% 
+    filter(SN == si) %>%
+    gather(Cond, Value, hx_1:hy_138) %>%
+    separate(Cond, into = c('XorY', 'Samplepoint', sep = "_")) %>%
+    spread(XorY, Value)
+  
+  ind.traj.plot <- E1.traj.data.long %>%
+    filter(block >= 3, fbi == 0) %>%
+    drop_na(hx, hy) %>%  
+    ggplot(aes(x = hx, y =hy, color = factor(ti), group = TN)) + 
+    geom_path(size = 0.5) +
+    coord_capped_cart(ylim = c(-150, 150), xlim = c(-150, 150)) +
+    th +
+    theme(axis.text.x = element_text(angle = 45, hjust = 0.95), 
+          legend.position = 'none') +
+    labs(x = 'x (mm)', y = 'y (mm)')
+  
+  print(ind.traj.plot)
+  
+  ggsave(sprintf('E1_SUB%s_Traj_%s.pdf', si, subDir), plot = ind.traj.plot, height = 3, width = 4,  units = "in")
+  
+}
+
+
+```
+
+
+
+
+
+
+Load in E2 (Reward exp) Hold time 500, with forced delay.
+```{r}
+
+E2.data <- as_tibble( read.csv("/Users/jonathantsay/Dropbox/MOTOR/use_dependent/use-dependent-learning/UD_E2.csv", header = TRUE, sep = ',')) %>% 
+  mutate(Distance_raw = as.double( abs(ti - trainTgt)), Distance = case_when(Distance_raw > 180 ~ abs(Distance_raw - 360),
+                                                    Distance_raw < -180 ~ abs(Distance_raw + 360),
+                                                    Distance_raw <= 180 & Distance_raw >= -180 ~ Distance_raw),
+                                                    CN = TN,
+                                                    Hand = hand_theta_40, Handb = NaN, RTb = NaN)
+
+
+E2.data.base.out <- baseline_subtract(E2.data, 71, 140, 0)
+E2.data <- E2.data.base.out[[1]]
+E2.data.base <- E2.data.base.out[[2]]
+
+# flip to inward bias 
+E2.data <- E2.data %>%
+  mutate(Hand_IB = case_when(trainTgt == 60 & (ti == 90   | ti == 120  | ti == 150 ) ~ -Handb, 
+                             trainTgt == 60 & (ti == 0   | ti == 30  | ti == 330 | ti == 60) ~ Handb, 
+                             trainTgt == 150 & (ti == 180  | ti == 210  | ti == 240) ~ -Handb, 
+                             trainTgt == 150 & (ti == 60   | ti == 90  | ti == 120 | ti == 150) ~ Handb))
+
+
+```
+
+
+Experiment 2 Group Data 
+```{r}
+
+E2.ind <- E2.data %>%
+  filter(block >= 3 & fbi == 0 ) %>%
+  group_by(SN, Distance, group) %>%
+  dplyr::summarise(hand_mean = mean(Hand_IB, na.rm = TRUE), 
+                   rt_mean = mean(RT, na.rm = TRUE), 
+                   mt_mean = mean(MT, na.rm = TRUE))
+
+E2.grp <- E2.ind %>% 
+  group_by(Distance, group) %>%
+  dplyr::summarise(hand_grp_mean = mean(hand_mean, na.rm = TRUE),
+                   hand_grp_stderr = std.error(hand_mean, na.rm = TRUE),
+                   rt_grp_mean = mean(rt_mean, na.rm = TRUE), 
+                   rt_grp_stderr = std.error(rt_mean, na.rm = TRUE))
+
+E2.grpBoth.plot <- E2.ind %>%
+  ggplot(aes(x = Distance, y = hand_mean, group = group, color = group)) + 
+  geom_segment(aes(x=-5, xend=95, y = 0, yend = 0), color = 'lightgrey') +
+  stat_summary(fun = 'mean', geom = "point") + 
+  stat_summary(fun = 'mean', geom = "line", linetype = 1) + 
+  stat_summary(fun.data = 'mean_se', geom = "errorbar", width = 2) + 
+  labs(y = 'Inward Bias (°)', x = 'Probe Distance (°)') +
+  scale_x_continuous(breaks = c(0, 30, 60, 90)) +
+  scale_color_manual(values = c( 'darkgrey', 'black')) +
+  th + theme(axis.text.x = element_text(angle = 45, hjust = 0.95), 
+             legend.position = 'none') +
+  coord_capped_cart(ylim = c(-5, 10))
+print(E2.grpBoth.plot)  
+
+ggsave(sprintf('E2_GroupBoth_%s.pdf', subDir), plot = E2.grpBoth.plot, height = 3, width = 4,  units = "in")
+
+```
+
+
+Experiment 2: Quantile Analysis Combined
+```{r}
+
+E2.data <- E2.data %>% mutate(SN_new = ifelse(group == "R", SN + 999, SN))
+
+E2.Quantile.comb.data <-E2.data %>%
+  filter(block >= 3 & fbi == 0 ) %>%
+  group_by(SN_new, Distance) %>%
+  mutate(quantile = ntile(RT, 5)) %>%
+  group_by(SN_new, Distance, quantile) %>%
+  dplyr::summarise(bias_mean = mean(Hand_IB, na.rm = TRUE), 
+                   RT_mean = mean(RT, na.rm = TRUE)) %>%
+  group_by(Distance, quantile) %>%
+  dplyr::summarise(bias_grp_mean = mean(bias_mean, na.rm = TRUE), 
+                   bias_std_err = std.error(bias_mean, na.rm = TRUE), 
+                   RT_grp_mean = mean(RT_mean, na.rm = TRUE), 
+                   RT_std_err = std.error(RT_mean, na.rm = TRUE))
+
+E2.Quantile.comb.plot <- E2.Quantile.comb.data %>%
+  ggplot(aes(x = RT_grp_mean, y = bias_grp_mean, color = factor(Distance), group = factor(Distance))) + 
+  geom_point() + 
+  geom_line() + 
+  geom_errorbarh(aes(xmax = RT_grp_mean + RT_std_err, xmin = RT_grp_mean - RT_std_err), alpha = 0.4)  +
+  geom_errorbar(aes(ymax =bias_grp_mean + bias_std_err, ymin = bias_grp_mean - bias_std_err), alpha = 0.4) + 
+  labs(y = 'Inward Bias (°)', x = 'RT (s)') +
+  scale_color_manual(values = c('black', my.colors2[c(1, 2, 3)]), guide = FALSE) + 
+  #scale_x_continuous(breaks = seq(0.2, 0.7, 0.1)) + 
+  scale_y_continuous(breaks = seq(0, 10, 5)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.95), 
+        legend.position = 'none') +
+  th + 
+  coord_capped_cart(ylim = c(-2, 10)) 
+print(E2.Quantile.comb.plot)
+
+ggsave(sprintf('E2_Quantile_Comb_%s.pdf', subDir), plot = E2.Quantile.comb.plot, height = 3, width = 4,  units = "in")
+
+```
+
+```{r}
+
+for(si in unique(E2.data$SN)){
+  
+  pro.data <- E2.data %>% 
+    filter(SN == si) %>%  
+    filter(block >= 3 & fbi == 0 & Distance > 0 & RT < 3)
+  
+  groupvar <- 1
+  myymin <- min( pro.data$RT[pro.data$SN == si & pro.data$block >= 3 & pro.data$fbi == 0], na.rm = TRUE) + 0.2
+  myymax <- max( pro.data$RT[pro.data$SN == si & pro.data$block >= 3 & pro.data$fbi == 0], na.rm = TRUE) - 0.2
+  
+  ind.plot <- pro.data %>%
+    ggplot(aes(x = RT, y = Hand_IB, group = factor(Distance))) + 
+    geom_point(alpha = 0.4, aes(color = factor(Distance))) + 
+    geom_smooth(method = 'lm', aes(color = factor(Distance)), size = 0.5, se = FALSE, linetype= groupvar) + 
+    facet_rep_wrap(.~Distance, repeat.tick.labels = TRUE, ncol = 4) + 
+    #scale_x_continuous(breaks = c(round(myymin, 1), round(myymax, 1) )) +
+    scale_color_manual(values = c(my.colors2[c(1, 2, 3)]), guide = FALSE) + 
+    labs(y = 'Inward Bias (°)', x = 'RT (s)', subtitle = sprintf('Exp 2 Subject #%s', si)) + 
+    th + theme(axis.text.x = element_text(angle = 45, hjust = 0.95), 
+               legend.position = 'none') +
+    coord_capped_cart(ylim = c(-25, 25)) 
+  print(ind.plot) 
+  
+  ggsave(sprintf('aE2_SUB%s_Grp%s_%s.pdf', si, groupvar, subDir), plot = ind.plot, height = 3, width = 4,  units = "in")
+  
+}
+
+```
+
+
+
+```{r}
+
+rewardcdf <- E2.data %>%
+  filter(block >= 3 & Distance == 0) %>%
+  ggplot(aes(x = abs(hand_theta), alpha = group)) + 
+  stat_ecdf(geom = "step") + 
+  scale_alpha_manual(values = c(0.2, 1), guide = FALSE) +
+  scale_x_continuous(limits = c(0, 40)) +
+  labs(y = 'Cumulative Probability', x = 'Error (°)') +
+  th
+print(rewardcdf)
+
+ggsave(sprintf('E2_rewardcdf_%s.pdf', subDir), plot = rewardcdf, height = 3, width = 3,  units = "in")
+
+
+
+```
+
+
+E1 Bimodal
+```{r}
+
+E1.data$Distance <- factor(E1.data$Distance, levels = c("0", "30", "60", "90"))
+E1.data.density <- E1.data %>%
+  filter(block > 2) %>%
+  ggplot(aes(x = Hand_IB, fill = Distance)) +
+  geom_density(alpha = 0.5) +
+  scale_x_continuous(breaks = seq(-30, 120, 30)) +
+  facet_rep_wrap(Distance~., ncol = 4, repeat.tick.labels = TRUE) + 
+  th + theme(legend.position = "none") + 
+  scale_fill_manual(values = c('black', my.colors2[c(1, 2, 3)]), guide = FALSE) +
+  coord_capped_cart(xlim = c(-30, 120)) +
+  labs(x = "Heading Angle (°)", y = "Probability Density")
+print(E1.data.density)
+
+#setwd("~/Desktop")
+ggsave(sprintf('E1_Density_%s.pdf', subDir), plot = E1.data.density, height = 3, width = 10.5,  units = "in")
+
+```
+
+```{r}
+
+VS.data.allprobes <-  as_tibble( read.csv("/Users/jonathantsay/Dropbox/MOTOR/use_dependent/use-dependent-learning/VerstynenSabes2011.csv", header = TRUE, sep = ',')) %>% mutate(Bias = Hand_IB)
+
+VS.data.density <- VS.data.allprobes %>%
+  ggplot(aes(x = Hand_IB, fill = factor(Distance)))  +
+  geom_density(alpha = 0.5) +
+   scale_x_continuous(breaks = seq(-30, 120, 30), limits = c(-60, 150)) +
+  facet_rep_wrap(Distance~., ncol = 4, repeat.tick.labels = TRUE) + 
+  th + theme(legend.position = "none") + 
+  scale_fill_manual(values = c('black', my.colors2[c(1, 2, 3)]), guide = FALSE) +
+  labs(x = "Heading Angle (°)", y = "Probability Density")
+print(VS.data.density)
+
+setwd("~/Desktop")
+#ggsave(sprintf('VS_Density_%s.pdf', subDir), plot = VS.data.density, height = 3, width = 10.5,  units = "in")
+
+```
+
+
+E2 Bimodal
+```{r}
+
+E2.data$Distance <- factor(E2.data$Distance, levels = c("0", "30", "60", "90"))
+E2.data.density <- E2.data %>%
+  filter(block > 2) %>%
+  ggplot(aes(x = Hand_IB, fill = Distance)) +
+  #geom_histogram(binwidth = 5) +
+  geom_density(alpha = 0.5) +
+  #geom_vline(xintercept = 90, linetype = "dotted") +
+  scale_x_continuous(breaks = seq(-30, 120, 30), limits = c(-60, 150)) +
+  coord_capped_cart(xlim = c(-30,120)) +
+  facet_rep_wrap(Distance~., ncol = 4, repeat.tick.labels = TRUE) + 
+  th + theme(legend.position = "none") + 
+  scale_fill_manual(values = c('black', my.colors2[c(1, 2, 3)]), guide = FALSE) +
+  labs(x = "Heading Angle (°)", y = "Probability Density")
+print(E2.data.density)
+
+#setwd("~/Desktop")
+ggsave(sprintf('E2_Density_%s.pdf', subDir), plot = E2.data.density, height = 3, width = 10.5,  units = "in")
+
+
+```
+
+E1 modeling
+```{r}
+
+E1.data$Distance <- factor(E1.data$Distance, levels = c(0, 90, 30, 60))
+E1.data.mod <- E1.data %>% filter(group == 1 & block >= 3) %>% group_by(SN, Distance) %>% mutate(scale_Hand_IB = scale(Hand_IB))
+myE1mod <- lmer(scale_Hand_IB ~ RT * factor(Distance) + (1 |SN), data = E1.data.mod %>% filter(Distance != "0"))
+summary(myE1mod)
+Anova(myE1mod, type = 'III')
+eta_sq(myE1mod)
+
+```
+
+
+VS modeling
+```{r}
+
+VS.data$Distance <- factor(VS.data$Distance, levels = c(0, 30, 60, 90))
+VS.data <- VS.data %>% group_by(SN, Distance) %>% mutate(scale_hand_IB = scale(Hand_IB))
+myVSmod <- lmer(Hand_IB ~  RT * factor(Distance) + (1|SN), data = VS.data)
+summary(myVSmod)
+Anova(myVSmod, type = 'III')
+eta_sq(myVSmod)
+
+```
+
+E2 modeling
+```{r}
+
+E2.data$Distance <- factor(E2.data$Distance, levels = c(0, 30, 60, 90))
+myE2mod <- lmer(Hand_IB ~ RT*Distance + (SN_new| group), data = E2.data %>% filter(block >= 3 & fbi == 0 ))
+summary(myE2mod)
+Anova(myE2mod, type = 'III')
+eta_sq(myE2mod)
+
+```
+
+
+Make overlapping distribution
+```{r}
+
+E1.data$Distance <- factor(E1.data$Distance, levels = c("0", "30", "60", "90"))
+E1.data.density.sub <- E1.data %>%
+  filter(block > 2) %>%
+  ggplot(aes(x = Hand_IB, fill = Distance, group = factor(SN))) +
+  #geom_histogram(binwidth = 5) +
+  #geom_vline(xintercept = 90, linetype = "dotted") +
+  geom_density(alpha = 0.1, size = 0.1) +
+  scale_x_continuous(breaks = seq(-30, 120, 30)) +
+  facet_rep_wrap(Distance~., ncol = 4, repeat.tick.labels = TRUE) + 
+  th + theme(legend.position = "none") + 
+  scale_fill_manual(values = c('black', my.colors2[c(1, 2, 3)]), guide = FALSE) +
+  coord_capped_cart(xlim = c(-30, 120)) +
+  labs(x = "Heading Angle (°)", y = "Probability Density")
+print(E1.data.density.sub)
+
+ggsave(sprintf('E1_ind_density_%s.pdf', subDir), plot = E1.data.density.sub, height = 3, width = 10.5,  units = "in")
+
+E2.data$Distance <- factor(E2.data$Distance, levels = c("0", "30", "60", "90"))
+E2.data.density.sub <- E2.data %>%
+  filter(block > 2) %>%
+  ggplot(aes(x = Hand_IB, fill = Distance, group = factor(SN))) +
+  #geom_histogram(binwidth = 5) +
+  geom_density(alpha = 0.1, size = 0.1) +
+  #geom_vline(xintercept = 90, linetype = "dotted") +
+  scale_x_continuous(breaks = seq(-30, 120, 30), limits = c(-60, 150)) +
+  coord_capped_cart(xlim = c(-30,120)) +
+  facet_rep_wrap(Distance~., ncol = 4, repeat.tick.labels = TRUE) + 
+  th + theme(legend.position = "none") + 
+  scale_fill_manual(values = c('black', my.colors2[c(1, 2, 3)]), guide = FALSE) +
+  labs(x = "Heading Angle (°)", y = "Probability Density")
+print(E2.data.density.sub)
+
+ggsave(sprintf('E2_ind_density_%s.pdf', subDir), plot = E2.data.density.sub, height = 3, width = 10.5,  units = "in")
+
+
+```
+
+
+```{r}
+
+```
+
+
